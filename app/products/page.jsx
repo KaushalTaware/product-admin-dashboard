@@ -3,15 +3,18 @@
 import { useEffect, useState,useRef } from "react";
 import ProtectedRoute from "@/components/ProtectedRoutes";
 import { useAuth } from "@/context/authContext";
+import Link from "next/link";
 import {
   getProducts,
   searchProducts,
   getCategories,
   getProductsByCategory,
+  deleteProduct
 } from "@/lib/productApi";
 import {
   useRouter,
   useSearchParams,
+  notFound
 } from "next/navigation";
 
 export default function ProductsPage() {
@@ -42,6 +45,9 @@ export default function ProductsPage() {
   //filter
   const [categories, setCategories] = useState([]);
 const [category, setCategory] = useState("");
+//sort
+const [sortBy, setSortBy] = useState("");
+const [order, setOrder] = useState("asc");
 
  
 
@@ -50,6 +56,8 @@ const [category, setCategory] = useState("");
     const urlPageSize = Number(searchParams.get("pageSize"));
     const urlSearch = searchParams.get("search") || "";
     const urlCategory = searchParams.get("category") || "";
+    const urlSortBy = searchParams.get("sortBy") || "";
+const urlOrder = searchParams.get("order") || "asc";
 
     // Validate page
     const validPage =
@@ -62,6 +70,13 @@ const [category, setCategory] = useState("");
       [10, 20, 50].includes(urlPageSize)
         ? urlPageSize
         : 20;
+
+        setSortBy(urlSortBy);
+setOrder(
+  ["asc", "desc"].includes(urlOrder)
+    ? urlOrder
+    : "asc"
+);
 
     setPage(validPage);
     setPageSize(validPageSize);
@@ -119,7 +134,58 @@ useEffect(() => {
       clearTimeout(timer);
     };
   }, [search]);
+const getUpdatedProducts = (apiProducts) => {
+  const storedProducts =
+    JSON.parse(localStorage.getItem("updatedProducts")) || {};
 
+  return apiProducts.map((product) => {
+    return storedProducts[product.id] || product;
+  });
+};
+const handleDelete = async (productId) => {
+  const confirmed = window.confirm(
+    "Are you sure you want to delete this product?"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    setError("");
+
+    // Call DummyJSON DELETE API
+    await deleteProduct(productId);
+
+    // Get existing deleted products
+    const deletedProducts =
+      JSON.parse(localStorage.getItem("deletedProducts")) || [];
+
+    // Save product ID as deleted
+    const updatedDeletedProducts = [
+      ...new Set([...deletedProducts, productId]),
+    ];
+
+    localStorage.setItem(
+      "deletedProducts",
+      JSON.stringify(updatedDeletedProducts)
+    );
+
+    // Remove immediately from current list
+    setProducts((previousProducts) =>
+      previousProducts.filter(
+        (product) => Number(product.id) !== Number(productId)
+      )
+    );
+
+    // Reduce total count
+   
+
+  } catch (error) {
+    console.error("Delete error:", error);
+    setError("Failed to delete product.");
+  }
+};
  
 const fetchProducts = async () => {
   const requestId = ++requestIdRef.current;
@@ -132,48 +198,86 @@ const fetchProducts = async () => {
 
     let response;
 
-    if (debouncedSearch.trim()) {
-  response = await searchProducts({
-    q: debouncedSearch.trim(),
-    limit: pageSize,
-    skip: skip,
-  });
-} else if (category) {
-  response = await getProductsByCategory(
-    category,
-    {
-      limit: pageSize,
-      skip: skip,
+    // Sorting parameters
+    const sortParams = {};
+
+    if (sortBy) {
+      sortParams.sortBy = sortBy;
+      sortParams.order = order;
     }
-  );
-} else {
-  response = await getProducts({
-    limit: pageSize,
-    skip: skip,
-  });
-}
+
+    // Search
+    if (debouncedSearch.trim()) {
+      response = await searchProducts({
+        q: debouncedSearch.trim(),
+        limit: pageSize,
+        skip: skip,
+        ...sortParams,
+      });
+    }
+
+    // Category
+    else if (category) {
+      response = await getProductsByCategory(
+        category,
+        {
+          limit: pageSize,
+          skip: skip,
+          ...sortParams,
+        }
+      );
+    }
+
+    // Normal products
+    else {
+      response = await getProducts({
+        limit: pageSize,
+        skip: skip,
+        ...sortParams,
+      });
+    }
 
     // Ignore old response
     if (requestId !== requestIdRef.current) {
       return;
     }
+const storedProducts =
+  JSON.parse(localStorage.getItem("updatedProducts")) || {};
 
-    setProducts(response.data.products);
-    setTotal(response.data.total);
+const deletedProducts =
+  JSON.parse(localStorage.getItem("deletedProducts")) || [];
 
+const updatedProducts = response.data.products
+  .filter(
+    (product) =>
+      !deletedProducts.includes(Number(product.id))
+  )
+  .map((product) => {
+    return storedProducts[product.id] || product;
+  });
+
+setProducts(updatedProducts);
+
+// Count only deleted products that exist in the API result
+const deletedFromCurrentResult =
+  response.data.products.filter((product) =>
+    deletedProducts.includes(Number(product.id))
+  ).length;
+
+setTotal(
+  response.data.total - deletedFromCurrentResult
+);
   } catch (error) {
     console.error(error);
 
-    // Ignore error from old request
-    if (requestId !== requestIdRef.current) {
-      return;
-    }
+    if (error.response?.status === 404) {
+    notFound();
+  }
 
-    setError("Failed to load products.");
+  setError("Failed to load product.");
 
   } finally {
-
-    // Only latest request can stop loading
+    // Only latest request controls loading
     if (requestId === requestIdRef.current) {
       setLoading(false);
     }
@@ -183,7 +287,7 @@ const fetchProducts = async () => {
   // Fetch whenever pagination or debounced search changes
   useEffect(() => {
     fetchProducts();
-  }, [page, pageSize, debouncedSearch,category]);
+  }, [page, pageSize, debouncedSearch,category,sortBy,order]);
 
   // Total number of pages
   const totalPages = Math.ceil(total / pageSize);
@@ -221,6 +325,23 @@ const fetchProducts = async () => {
   router.push(`/products?${params.toString()}`);
 }, [category]);
   
+useEffect(() => {
+  const params = new URLSearchParams(
+    searchParams.toString()
+  );
+
+  params.set("page", "1");
+
+  if (sortBy) {
+    params.set("sortBy", sortBy);
+    params.set("order", order);
+  } else {
+    params.delete("sortBy");
+    params.delete("order");
+  }
+
+  router.push(`/products?${params.toString()}`);
+}, [sortBy, order]);
   return (
     <ProtectedRoute>
       <main className="min-h-screen bg-gray-100 p-4 text-black md:p-8">
@@ -237,12 +358,20 @@ const fetchProducts = async () => {
             </p>
           </div>
 
+          <div>
+<button
+  onClick={() => router.push("/products/add")}
+  className="rounded bg-black px-4 py-2 m-5 text-white"
+>
+  Add Product
+</button>
           <button
             onClick={logout}
-            className="rounded bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
+            className="rounded bg-red-600 px-4 py-2.5  text-sm text-white hover:bg-red-700"
           >
             Logout
           </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -292,7 +421,65 @@ const fetchProducts = async () => {
     ))}
   </select>
 </div> 
+<div className="mt-4 grid gap-4 md:grid-cols-2">
+
+  {/* Sort By */}
+  <div>
+    <label className="mb-2 block text-sm font-medium">
+      Sort By
+    </label>
+
+    <select
+      value={sortBy}
+      onChange={(e) => {
+        setSortBy(e.target.value);
+      }}
+      className="w-full rounded border px-3 py-2"
+    >
+      <option value="">
+        Default
+      </option>
+
+      <option value="title">
+        Title
+      </option>
+
+      <option value="price">
+        Price
+      </option>
+
+      <option value="rating">
+        Rating
+      </option>
+    </select>
+  </div>
+
+  {/* Order */}
+  <div>
+    <label className="mb-2 block text-sm font-medium">
+      Order
+    </label>
+
+    <select
+      value={order}
+      onChange={(e) => {
+        setOrder(e.target.value);
+      }}
+      className="w-full rounded border px-3 py-2"
+    >
+      <option value="asc">
+        Ascending
+      </option>
+
+      <option value="desc">
+        Descending
+      </option>
+    </select>
+  </div>
+
+</div>
         </div>
+        
 
         {/* Loading */}
         {loading && (
@@ -357,6 +544,9 @@ const fetchProducts = async () => {
                     <th className="px-4 py-3">
                       Stock
                     </th>
+                    <th className="px-4 py-3">
+  Actions
+</th>
                   </tr>
                 </thead>
 
@@ -374,9 +564,14 @@ const fetchProducts = async () => {
                         />
                       </td>
 
-                      <td className="px-4 py-3 font-medium">
-                        {product.title}
-                      </td>
+                    <td className="px-4 py-3">
+  <Link
+    href={`/products/${product.id}`}
+    className="font-medium text-blue-600 hover:underline"
+  >
+    {product.title}
+  </Link>
+</td>
 
                       <td className="px-4 py-3 capitalize">
                         {product.category}
@@ -393,6 +588,25 @@ const fetchProducts = async () => {
                       <td className="px-4 py-3">
                         {product.stock}
                       </td>
+                      <td className="px-4 py-3">
+  <div className="flex gap-2">
+    <button
+      onClick={() =>
+        router.push(`/products/${product.id}/edit`)
+      }
+      className="rounded bg-black px-3 py-1 text-sm text-white"
+    >
+      Edit
+    </button>
+
+    <button
+      onClick={() => handleDelete(product.id)}
+      className="rounded bg-red-600 px-3 py-1 text-sm text-white"
+    >
+      Delete
+    </button>
+  </div>
+</td>
                     </tr>
                   ))}
                 </tbody>
@@ -418,9 +632,12 @@ const fetchProducts = async () => {
                     />
 
                     <div className="flex-1">
-                      <h2 className="font-semibold">
-                        {product.title}
-                      </h2>
+                      <Link
+  href={`/products/${product.id}`}
+  className="font-semibold text-blue-600 hover:underline"
+>
+  {product.title}
+</Link>
 
                       <p className="mt-1 text-sm capitalize">
                         {product.category}
@@ -441,6 +658,23 @@ const fetchProducts = async () => {
                       Stock: {product.stock}
                     </span>
                   </div>
+                   <div className="mt-3 flex gap-2">
+  <button
+    onClick={() =>
+      router.push(`/products/${product.id}/edit`)
+    }
+    className="flex-1 rounded bg-black px-3 py-2 text-sm text-white"
+  >
+    Edit
+  </button>
+
+  <button
+    onClick={() => handleDelete(product.id)}
+    className="flex-1 rounded bg-red-600 px-3 py-2 text-sm text-white"
+  >
+    Delete
+  </button>
+</div>
                 </div>
               ))}
             </div>
