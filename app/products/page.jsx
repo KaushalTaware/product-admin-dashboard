@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState,useRef } from "react";
 import ProtectedRoute from "@/components/ProtectedRoutes";
 import { useAuth } from "@/context/authContext";
 import {
   getProducts,
   searchProducts,
+  getCategories,
+  getProductsByCategory,
 } from "@/lib/productApi";
 import {
   useRouter,
@@ -14,6 +16,7 @@ import {
 
 export default function ProductsPage() {
   const { user, logout } = useAuth();
+  const requestIdRef = useRef(0);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -36,14 +39,17 @@ export default function ProductsPage() {
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
 
-  // --------------------------------------------------
-  // Read values from URL
-  // --------------------------------------------------
+  //filter
+  const [categories, setCategories] = useState([]);
+const [category, setCategory] = useState("");
+
+ 
 
   useEffect(() => {
     const urlPage = Number(searchParams.get("page"));
     const urlPageSize = Number(searchParams.get("pageSize"));
     const urlSearch = searchParams.get("search") || "";
+    const urlCategory = searchParams.get("category") || "";
 
     // Validate page
     const validPage =
@@ -61,11 +67,24 @@ export default function ProductsPage() {
     setPageSize(validPageSize);
     setSearch(urlSearch);
     setDebouncedSearch(urlSearch);
+    setCategory(urlCategory);
   }, [searchParams]);
 
-  // --------------------------------------------------
-  // Debounce search
-  // --------------------------------------------------
+
+useEffect(() => {
+  const fetchCategories = async () => {
+    try {
+      const response = await getCategories();
+
+      setCategories(response.data);
+    } catch (error) {
+      console.error("Failed to load categories:", error);
+    }
+  };
+
+  fetchCategories();
+}, []);
+
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -77,9 +96,6 @@ export default function ProductsPage() {
     };
   }, [search]);
 
-  // --------------------------------------------------
-  // Update search in URL
-  // --------------------------------------------------
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -104,56 +120,75 @@ export default function ProductsPage() {
     };
   }, [search]);
 
-  // --------------------------------------------------
-  // Fetch products
-  // --------------------------------------------------
+ 
+const fetchProducts = async () => {
+  const requestId = ++requestIdRef.current;
 
-  const fetchProducts = async () => {
-    try {
-      setLoading(true);
-      setError("");
+  try {
+    setLoading(true);
+    setError("");
 
-      const skip = (page - 1) * pageSize;
+    const skip = (page - 1) * pageSize;
 
-      let response;
+    let response;
 
-      if (debouncedSearch.trim()) {
-        // Search API
-        response = await searchProducts({
-          q: debouncedSearch.trim(),
-          limit: pageSize,
-          skip: skip,
-        });
-      } else {
-        // Normal products API
-        response = await getProducts({
-          limit: pageSize,
-          skip: skip,
-        });
-      }
+    if (debouncedSearch.trim()) {
+  response = await searchProducts({
+    q: debouncedSearch.trim(),
+    limit: pageSize,
+    skip: skip,
+  });
+} else if (category) {
+  response = await getProductsByCategory(
+    category,
+    {
+      limit: pageSize,
+      skip: skip,
+    }
+  );
+} else {
+  response = await getProducts({
+    limit: pageSize,
+    skip: skip,
+  });
+}
 
-      setProducts(response.data.products);
-      setTotal(response.data.total);
-    } catch (error) {
-      console.error(error);
-      setError("Failed to load products.");
-    } finally {
+    // Ignore old response
+    if (requestId !== requestIdRef.current) {
+      return;
+    }
+
+    setProducts(response.data.products);
+    setTotal(response.data.total);
+
+  } catch (error) {
+    console.error(error);
+
+    // Ignore error from old request
+    if (requestId !== requestIdRef.current) {
+      return;
+    }
+
+    setError("Failed to load products.");
+
+  } finally {
+
+    // Only latest request can stop loading
+    if (requestId === requestIdRef.current) {
       setLoading(false);
     }
-  };
+  }
+};
 
   // Fetch whenever pagination or debounced search changes
   useEffect(() => {
     fetchProducts();
-  }, [page, pageSize, debouncedSearch]);
+  }, [page, pageSize, debouncedSearch,category]);
 
   // Total number of pages
   const totalPages = Math.ceil(total / pageSize);
 
-  // --------------------------------------------------
-  // Pagination URL update
-  // --------------------------------------------------
-
+  
   const updatePagination = (
     newPage,
     newPageSize = pageSize
@@ -168,10 +203,24 @@ export default function ProductsPage() {
     router.push(`/products?${params.toString()}`);
   };
 
-  // --------------------------------------------------
-  // UI
-  // --------------------------------------------------
 
+  useEffect(() => {
+  const params = new URLSearchParams(
+    searchParams.toString()
+  );
+
+  params.set("page", "1");
+
+  if (category) {
+    params.set("category", category);
+    params.delete("search");
+  } else {
+    params.delete("category");
+  }
+
+  router.push(`/products?${params.toString()}`);
+}, [category]);
+  
   return (
     <ProtectedRoute>
       <main className="min-h-screen bg-gray-100 p-4 text-black md:p-8">
@@ -209,6 +258,40 @@ export default function ProductsPage() {
             placeholder="Search products..."
             className="w-full rounded border px-3 py-2 outline-none focus:ring-2"
           />
+
+          <div className="mt-4">
+  <label className="mb-2 block text-sm font-medium">
+    Category
+  </label>
+
+  <select
+    value={category}
+    onChange={(e) => {
+      const newCategory = e.target.value;
+
+      setCategory(newCategory);
+
+      if (newCategory) {
+        setSearch("");
+        setDebouncedSearch("");
+      }
+    }}
+    className="w-full rounded border px-3 py-2"
+  >
+    <option value="">
+      All Categories
+    </option>
+
+    {categories.map((item) => (
+      <option
+        key={item.slug}
+        value={item.slug}
+      >
+        {item.name}
+      </option>
+    ))}
+  </select>
+</div> 
         </div>
 
         {/* Loading */}
@@ -363,14 +446,14 @@ export default function ProductsPage() {
             </div>
           )}
 
-        {/* Pagination */}
+       
         {!loading &&
           !error &&
           products.length > 0 && (
             <div className="mt-6 rounded-lg bg-white p-4 shadow">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 
-                {/* Showing text */}
+                
                 <p className="text-sm text-gray-600">
                   Showing{" "}
                   {(page - 1) * pageSize + 1}
@@ -382,7 +465,7 @@ export default function ProductsPage() {
                   of {total}
                 </p>
 
-                {/* Page size */}
+                
                 <div className="flex items-center gap-2">
                   <label className="text-sm">
                     Page size:
@@ -415,10 +498,10 @@ export default function ProductsPage() {
                   </select>
                 </div>
 
-                {/* Pagination buttons */}
+                
                 <div className="flex items-center gap-2">
 
-                  {/* Previous */}
+                  
                   <button
                     disabled={page === 1}
                     onClick={() =>
@@ -429,7 +512,6 @@ export default function ProductsPage() {
                     Previous
                   </button>
 
-                  {/* Page numbers */}
                   {Array.from(
                     { length: totalPages },
                     (_, index) => index + 1
@@ -451,7 +533,7 @@ export default function ProductsPage() {
                     </button>
                   ))}
 
-                  {/* Next */}
+                 
                   <button
                     disabled={
                       page === totalPages
