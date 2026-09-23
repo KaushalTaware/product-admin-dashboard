@@ -51,19 +51,43 @@ export default function AddProductPage() {
 
     setLoading(true);
 
-    try {
-      const response = await addProduct({
-        title: form.title,
-        price: Number(form.price),
-        stock: Number(form.stock),
-        category: form.category,
-        description: form.description,
-      });
+   try {
+  const response = await addProduct({
+    title: form.title,
+    price: Number(form.price),
+    stock: Number(form.stock),
+    category: form.category,
+    description: form.description,
+  });
 
-      console.log("Created product:", response.data);
+  console.log("Created product:", response.data);
 
-      router.push("/products");
-    } catch (error) {
+  // Get existing locally added products
+  const addedProducts =
+    JSON.parse(localStorage.getItem("addedProducts")) || [];
+
+  // Create complete product object
+  const newProduct = {
+    ...response.data,
+
+    title: form.title,
+    price: Number(form.price),
+    stock: Number(form.stock),
+    category: form.category,
+    description: form.description,
+  };
+
+  // Store the new product
+  addedProducts.push(newProduct);
+
+  localStorage.setItem(
+    "addedProducts",
+    JSON.stringify(addedProducts)
+  );
+
+  router.push("/products");
+}
+     catch (error) {
       console.error(error);
       setError("Failed to add product.");
     } finally {

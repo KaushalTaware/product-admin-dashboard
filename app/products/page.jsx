@@ -147,21 +147,44 @@ const handleDelete = async (productId) => {
     "Are you sure you want to delete this product?"
   );
 
-  if (!confirmed) {
-    return;
-  }
+  if (!confirmed) return;
 
   try {
     setError("");
 
-    // Call DummyJSON DELETE API
+    const addedProducts =
+      JSON.parse(localStorage.getItem("addedProducts")) || [];
+
+    const isAddedProduct = addedProducts.some(
+      (product) => Number(product.id) === Number(productId)
+    );
+
+    // If it is a locally added product
+    if (isAddedProduct) {
+      const remainingProducts = addedProducts.filter(
+        (product) => Number(product.id) !== Number(productId)
+      );
+
+      localStorage.setItem(
+        "addedProducts",
+        JSON.stringify(remainingProducts)
+      );
+
+      setProducts((previousProducts) =>
+        previousProducts.filter(
+          (product) => Number(product.id) !== Number(productId)
+        )
+      );
+
+      return;
+    }
+
+    // Otherwise, delete the DummyJSON product
     await deleteProduct(productId);
 
-    // Get existing deleted products
     const deletedProducts =
       JSON.parse(localStorage.getItem("deletedProducts")) || [];
 
-    // Save product ID as deleted
     const updatedDeletedProducts = [
       ...new Set([...deletedProducts, productId]),
     ];
@@ -171,16 +194,11 @@ const handleDelete = async (productId) => {
       JSON.stringify(updatedDeletedProducts)
     );
 
-    // Remove immediately from current list
     setProducts((previousProducts) =>
       previousProducts.filter(
         (product) => Number(product.id) !== Number(productId)
       )
     );
-
-    // Reduce total count
-   
-
   } catch (error) {
     console.error("Delete error:", error);
     setError("Failed to delete product.");
@@ -255,8 +273,18 @@ const updatedProducts = response.data.products
   .map((product) => {
     return storedProducts[product.id] || product;
   });
+  const addedProducts =
+  JSON.parse(localStorage.getItem("addedProducts")) || [];
 
-setProducts(updatedProducts);
+const allProducts =
+  page === 1
+    ? [...addedProducts, ...updatedProducts]
+    : updatedProducts;
+
+setProducts(allProducts);
+
+
+
 
 // Count only deleted products that exist in the API result
 const deletedFromCurrentResult =
@@ -291,6 +319,7 @@ setTotal(
 
   // Total number of pages
   const totalPages = Math.ceil(total / pageSize);
+  
 
   
   const updatePagination = (
@@ -306,7 +335,11 @@ setTotal(
 
     router.push(`/products?${params.toString()}`);
   };
-
+useEffect(() => {
+  if (totalPages > 0 && page > totalPages) {
+    updatePagination(totalPages);
+  }
+}, [page, totalPages]);
 
   useEffect(() => {
   const params = new URLSearchParams(
